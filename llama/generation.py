@@ -18,6 +18,7 @@ from fairscale.nn.model_parallel.initialize import (
 
 from llama.model import ModelArgs, Transformer
 from llama.tokenizer import Tokenizer
+from tqdm import tqdm
 
 Role = Literal["system", "user", "assistant"]
 
@@ -97,6 +98,40 @@ class Llama:
         print(f"Loaded in {time.time() - start_time:.2f} seconds")
 
         return Llama(model, tokenizer)
+
+    @staticmethod
+    def build_all(
+        ckpt_dir: str,
+        tokenizer_path: str,
+        max_seq_len: int,
+        max_batch_size: int,
+        model_parallel_size: Optional[int] = None,
+    ) -> "Llama":
+        # seed must be the same in all processes
+        torch.manual_seed(1)
+
+        start_time = time.time()
+        checkpoints = sorted(Path(ckpt_dir).glob("*.pth"))
+        with open(Path(ckpt_dir) / "params.json", "r") as f:
+            params = json.loads(f.read())
+
+        model_args: ModelArgs = ModelArgs(
+            max_seq_len=max_seq_len,
+            max_batch_size=max_batch_size,
+            **params,
+        )
+        tokenizer = Tokenizer(model_path=tokenizer_path)
+        model_args.vocab_size = tokenizer.n_words
+        del tokenizer
+        torch.set_default_tensor_type(torch.cuda.HalfTensor)
+        model = Transformer(model_args).cpu()
+        torch.cuda.empty_cache()
+        for ckpt_path in tqdm(checkpoints):
+            checkpoint = torch.load(ckpt_path, map_location="cpu")
+            model.load_state_dict(checkpoint, strict=False)
+        print(f"Loaded in {time.time() - start_time:.2f} seconds")
+
+        return model
 
     def __init__(self, model: Transformer, tokenizer: Tokenizer):
         self.model = model
