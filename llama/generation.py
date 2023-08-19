@@ -123,7 +123,7 @@ class Llama:
         tokenizer = Tokenizer(model_path=tokenizer_path)
         model_args.vocab_size = tokenizer.n_words
         del tokenizer
-        torch.set_default_tensor_type(torch.cuda.HalfTensor)
+        torch.set_default_tensor_type(torch.HalfTensor)
         model = Transformer(model_args).cpu()
         state = model.state_dict()
         torch.cuda.empty_cache()
