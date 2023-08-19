@@ -7,7 +7,7 @@ import sys
 import time
 from pathlib import Path
 from typing import List, Literal, Optional, Tuple, TypedDict
-
+import numpy as np
 import torch
 import torch.nn.functional as F
 from fairscale.nn.model_parallel.initialize import (
@@ -100,7 +100,7 @@ class Llama:
         return Llama(model, tokenizer)
 
     @staticmethod
-    def build_all(
+    def build_model_all(
         ckpt_dir: str,
         tokenizer_path: str,
         max_seq_len: int,
@@ -111,7 +111,7 @@ class Llama:
         torch.manual_seed(1)
 
         start_time = time.time()
-        checkpoints = sorted(Path(ckpt_dir).glob("*.pth"))
+        checkpoint_paths = sorted(Path(ckpt_dir).glob("*.pth"))
         with open(Path(ckpt_dir) / "params.json", "r") as f:
             params = json.loads(f.read())
 
@@ -125,10 +125,17 @@ class Llama:
         del tokenizer
         torch.set_default_tensor_type(torch.cuda.HalfTensor)
         model = Transformer(model_args).cpu()
+        state = model.state_dict()
         torch.cuda.empty_cache()
-        for ckpt_path in tqdm(checkpoints):
-            checkpoint = torch.load(ckpt_path, map_location="cpu")
-            model.load_state_dict(checkpoint, strict=False)
+        checkpoint = torch.load(checkpoint_paths[0], map_location="cpu")
+        for ckpt_path in tqdm(checkpoint_paths[1:]):
+            ckpt = torch.load(ckpt_path, map_location="cpu")
+            for k in state.keys():
+                if k not in checkpoint: continue
+                if checkpoint[k].shape == state[k].shape: continue
+                _dim = np.where((np.array(checkpoint[k].shape) != np.array(state[k].shape)) == True)[0].item()
+                checkpoint[k] = torch.cat([checkpoint[k], ckpt[k]], dim=_dim)
+        model.load_state_dict(checkpoint, strict=False)
         print(f"Loaded in {time.time() - start_time:.2f} seconds")
 
         return model
