@@ -106,6 +106,7 @@ class Llama:
         max_seq_len: int,
         max_batch_size: int,
         model_parallel_size: Optional[int] = None,
+        delta_l: int = -1
     ) -> "Llama":
         # seed must be the same in all processes
         torch.manual_seed(1)
@@ -120,22 +121,40 @@ class Llama:
             max_batch_size=max_batch_size,
             **params,
         )
+        # print("load tokenizer...")
         tokenizer = Tokenizer(model_path=tokenizer_path)
         model_args.vocab_size = tokenizer.n_words
+        # print("tokenizer.n_words:", tokenizer.n_words)
         del tokenizer
         torch.set_default_tensor_type(torch.HalfTensor)
+        # print("build model...")
         model = Transformer(model_args).cpu()
-        state = model.state_dict()
-        torch.cuda.empty_cache()
-        checkpoint = torch.load(checkpoint_paths[0], map_location="cpu")
-        for ckpt_path in tqdm(checkpoint_paths[1:]):
-            ckpt = torch.load(ckpt_path, map_location="cpu")
-            for k in state.keys():
-                if k not in checkpoint: continue
-                if checkpoint[k].shape == state[k].shape: continue
-                _dim = np.where((np.array(checkpoint[k].shape) != np.array(state[k].shape)) == True)[0].item()
-                checkpoint[k] = torch.cat([checkpoint[k], ckpt[k]], dim=_dim)
-        model.load_state_dict(checkpoint, strict=False)
+        L = len(model.state_dict().keys())
+        if delta_l == -1: delta_l = L
+        l_idx = 0
+        while l_idx < L:
+            # print(l_idx, L)
+            state = model.state_dict()
+            l_range = list(range(l_idx, l_idx+delta_l))
+            keys_to_remove = list(state.keys())[:l_idx] + list(state.keys())[l_idx+delta_l:]
+            for _key in keys_to_remove:
+                del state[_key]
+            torch.cuda.empty_cache()
+            checkpoint = torch.load(checkpoint_paths[0], map_location="cpu")
+            for _key in keys_to_remove:
+                del checkpoint[_key]
+            for ckpt_path in tqdm(checkpoint_paths[1:]):
+                ckpt = torch.load(ckpt_path, map_location="cpu")
+                for _key in keys_to_remove:
+                    del ckpt[_key]
+                for k in state.keys():
+                    if k not in checkpoint: continue
+                    if checkpoint[k].shape == state[k].shape: continue
+                    _dim = np.where((np.array(checkpoint[k].shape) != np.array(state[k].shape)) == True)[0].item()
+                    checkpoint[k] = torch.cat([checkpoint[k], ckpt[k]], dim=_dim).to(torch.float16)
+                del ckpt
+            model.load_state_dict(checkpoint, strict=False)
+            l_idx += delta_l
         print(f"Loaded in {time.time() - start_time:.2f} seconds")
 
         return model
